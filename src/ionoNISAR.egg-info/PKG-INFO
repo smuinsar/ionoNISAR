@@ -29,13 +29,14 @@ Dynamic: license-file
 
 Correcting the ionosphere in NISAR L-band repeat-pass interferograms.
 
-At L band the ionosphere does two things to an interferogram. A gradient in total electron
-content along track shifts targets in azimuth, which misregisters the pair and costs
-coherence in bands that can run the length of a frame; and the dispersive delay itself puts
-a smooth, large-amplitude signal into the phase. This package measures and removes both: it
-registers the pair against the measured azimuth shift, refocuses where that shift changes
-too quickly within one synthetic aperture for a single shift to serve, and subtracts a phase
-screen built from the azimuth offsets and the split-spectrum estimate together.
+At L band, the ionosphere affects interferometry in two primary ways. Along-track gradients 
+in total electron content produce spatially varying azimuth shifts that misregister the image 
+pair and can cause pronounced, banded coherence loss across a frame. At the same time, the 
+dispersive ionospheric delay introduces a large-scale phase signal into the interferogram. 
+ionoNISAR addresses both effects: it corrects spatially varying azimuth misregistration 
+using measured azimuth offsets, applies Doppler-dependent refocusing where the shift varies 
+significantly over the synthetic aperture, and removes the ionospheric phase contribution 
+using a phase screen that combines azimuth-offset and split-spectrum estimates.
 
 ## What it does
 
@@ -59,7 +60,7 @@ screen built from the azimuth offsets and the split-spectrum estimate together.
 
 ## Requirements
 
-**This is not a laptop workflow.** One pair needs
+One pair needs
 
 - about **55 GB** of RSLC downloads (two granules), plus ~25 GB per GSLC date for screening,
 - about **300 GB** of free scratch, most of it the exported flat-binary SLC pair and the
@@ -120,8 +121,10 @@ ionoNISAR --config pair.yaml run --routes hybrid
 ```
 
 `run` is `coregister` followed by `screen`; either can be run on its own, and both skip work
-that is already on disk. Every stage takes extra arguments straight through, so
-`ionoNISAR --config pair.yaml coregister --gpus 0,1` works.
+that is already on disk. The `coregister`, `screen`, `refocus` and `run` stages forward any
+argument they do not recognise to the tool they drive, so
+`ionoNISAR --config pair.yaml coregister --gpus 0,1` works. The other stages reject an
+unknown argument rather than passing it on.
 
 `ionoNISAR refocus --selftest` checks the refocusing arithmetic against a synthetic pair and
 needs no data.
@@ -134,9 +137,6 @@ pronounced streaking, and that number is an empirical guide rather than a thresh
 caveats change the value itself — the measurement returns nothing for a frame whose rotated
 interior is too small or too sparsely filled, and mask holes attenuate it — so values are
 comparable between frames of similar valid fraction, not across arbitrary ones.
-
-The sign of `D_RA` in the same table is the direction the anisotropic gap fill should stretch
-along, and the chain reads it from there.
 
 ## Choices worth knowing about
 

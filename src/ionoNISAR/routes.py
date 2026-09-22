@@ -386,6 +386,7 @@ def screen_offsets(a, args, win_d, win):
     #
     # Both reuse gates check provenance, so changing a screen setting on an existing product
     # REBUILDS rather than silently reusing the old screen under the new settings' name.
+    os.makedirs(a.dir("offsets"), exist_ok=True)
     out_npz = os.path.join(a.dir("offsets"), f"iono_screen_{a.tag}.npz")
     src = os.path.join(a.scratch, f"iono_screen_{a.tag}.npz")
     want = _screen_request(a)
@@ -477,6 +478,7 @@ def screen_split(a, args=None, d=None, win=None):
     from .screens import split as S
 
     d = a.dir("split")
+    os.makedirs(d, exist_ok=True)
     out_npz = os.path.join(d, f"iono_screen_{a.tag}.npz")
     if os.path.exists(out_npz) and not a.force_screen:
         print(f"[split] reusing {out_npz}")
@@ -838,8 +840,7 @@ def main(argv=None):
     screens = {}
     for r in routes:
         print(f"\n--- screen: {r} " + "-" * (60 - len(r)))
-        screens[r] = check_screen(
-            r, SCREEN_FN[r](a, args, d, win) if r == "offsets" else SCREEN_FN[r](a))
+        screens[r] = check_screen(r, SCREEN_FN[r](a, args, d, win))
 
     # --- stage 4: the shared rungs
     print("\n--- rungs: prerb / rb / rbc (screen-independent, built once) " + "-" * 16)
