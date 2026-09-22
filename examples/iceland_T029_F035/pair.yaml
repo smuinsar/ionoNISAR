@@ -1,0 +1,31 @@
+# Iceland, track 29 frame 35, 2026-07-22 / 2026-08-15.
+#
+# Same settings as the Alaska example; the frame differs, not the recipe.
+
+track: 29
+frame: 35
+dates: [20260722, 20260815]
+pol: HH
+grid_epsg: 3413
+
+posting: 120
+looks: [24, 16]
+
+gpus: "0"
+
+fill:
+  cutoff: 30
+  robust: 0
+  hole_cutoff: 100
+  hole_km: 0.25
+  aniso: auto
+outlier:
+  spike: 3
+  min_neighbors: 6
+
+refocus_km: auto
+
+split:
+  unwrap_diff: false
+
+hybrid_cut_km: 32

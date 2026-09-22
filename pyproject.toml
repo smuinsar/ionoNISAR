@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ionoNISAR"
+version = "0.1.0"
+description = "Ionospheric correction for NISAR L-band interferograms"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.9"
+dependencies = [
+    "numpy",
+    "pyyaml",
+    "scipy",
+    "h5py",
+    "rasterio",
+    "pyproj",
+    "matplotlib",
+    "geopandas",
+    "shapely",
+    "pandas",
+    "requests",
+    "asf_search",
+    "earthaccess",
+    "dem_stitcher",
+    "snaphu",
+    "scikit-image",
+    "tqdm",
+]
+
+[project.scripts]
+ionoNISAR = "ionoNISAR.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"ionoNISAR._utils" = ["*.cm"]

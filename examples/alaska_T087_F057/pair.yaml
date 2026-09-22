@@ -1,0 +1,40 @@
+# Alaska, track 87 frame 57, 2026-07-14 / 2026-07-26.
+#
+# Run the stages in the order given in the README.  Paths are relative to the
+# directory you run in, which is expected to be one working directory per frame.
+
+track: 87
+frame: 57
+dates: [20260714, 20260726]
+pol: HH
+grid_epsg: 3413        # polar stereographic north
+
+# Output posting and multilook.  24 x 16 looks is about 107 m along track and
+# 50 m in slant range before geocoding to 120 m.
+posting: 120
+looks: [24, 16]
+
+gpus: "0"              # a list such as 0,1,2,3 shards the correlation over several
+
+# Hole filling and outlier rejection for the dense offset field.  These are the
+# per-pair settings: a frame carrying a narrow, steep streak needs a stiffer fit
+# (cutoff 30, bisquare off) than the defaults, and the hole scale hands deep
+# glacier interiors over to a held surface.
+fill:
+  cutoff: 30
+  robust: 0
+  hole_cutoff: 100
+  hole_km: 0.25
+  aniso: auto          # measured from the field; `1.0` forces an isotropic fill
+outlier:
+  spike: 3
+  min_neighbors: 6
+
+# Doppler-dependent refocusing.  `auto` sweeps the pierce aperture and applies
+# the refocus only if it buys coherence; a number in km pins it.
+refocus_km: auto
+
+split:
+  unwrap_diff: false   # leave the A-B band difference wrapped
+
+hybrid_cut_km: 32      # along-track wavelength where the screen changes over
