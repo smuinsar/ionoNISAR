@@ -232,7 +232,7 @@ def _interior(img):
     if sub.size < 4096 or fill < MIN_INTERIOR_FILL:
         why = "too small" if sub.size < 4096 else f"fill {fill:.3f} < {MIN_INTERIOR_FILL}"
         print(f"    texture skipped: rotated interior {sub.shape[0]}x{sub.shape[1]}, {why}"
-              f" -- R_fft/theta_fft/D_tensor will be NaN for this pair")
+              f" -- R_fft and theta_fft will be NaN for this pair")
         return None, None
     return np.where(np.isfinite(sub), sub, 0.0), w
 
@@ -242,29 +242,11 @@ def directionality(r, ok, cell, az_b, smooth_km=2.0):
     rl = lowpass(r, ok, cell, smooth_km)
     rot, _ = radar_frame(rl, ok, az_b)          # azimuth vertical, range horizontal
     a, w = _interior(rot)
-    out = {"theta_s": np.nan, "D_tensor": np.nan, "R_fft": np.nan, "theta_fft": np.nan,
-           "D_RA": np.nan}
+    out = {"R_fft": np.nan, "theta_fft": np.nan, "D_RA": np.nan}
     if a is None:
         return out
-    from scipy.ndimage import binary_erosion
     a = a - (a * w).sum() / w.sum()
     a = np.where(w > 0, a, 0.0)
-
-    # ---- structure tensor.  +x is +column (range), +y is -row (azimuth).
-    # The field is NOT multiplied by the weight: that puts a cliff at every hole rim, and a
-    # rim is an edge in every direction at once, which collapses the measured anisotropy.
-    # The rims are excluded from the sums instead.
-    inner = binary_erosion(w > 0, np.ones((5, 5), bool))
-    grow, gcol = np.gradient(a)
-    gx, gy = gcol / cell, -grow / cell
-    Jxx = float((gx * gx)[inner].sum())
-    Jyy = float((gy * gy)[inner].sum())
-    Jxy = float((gx * gy)[inner].sum())
-    d = np.hypot(Jxx - Jyy, 2.0 * Jxy)
-    l1, l2 = (Jxx + Jyy + d) / 2.0, (Jxx + Jyy - d) / 2.0
-    out["D_tensor"] = float((l1 - l2) / max(l1 + l2, 1e-30))
-    th_grad = 0.5 * np.degrees(np.arctan2(2.0 * Jxy, Jxx - Jyy))   # max-gradient axis, from +x
-    out["theta_s"] = float((th_grad + 180.0) % 180.0 - 90.0)       # streak is perpendicular
 
     # ---- 2-D Fourier angular concentration.  Hann-windowed: without it the crop's own edges
     # put a cross of power on the array axes, which HERE ARE range and azimuth -- i.e. exactly
@@ -277,9 +259,9 @@ def directionality(r, ok, cell, az_b, smooth_km=2.0):
     k = np.hypot(kx, ky)
     m = (k > 3.0 / max(ny, nx)) & (k < 0.33)     # drop DC/trend and the aliased corners
     if m.sum() > 64:
-        # ky indexes ROWS, which increase DOWNWARD, while the tensor above works in a
-        # right-handed frame with +y up.  Negate it or the two estimators disagree in SIGN --
-        # they did, -10.04 against +9.61 on an 8 deg synthetic, until this was caught.
+        # ky indexes ROWS, which increase DOWNWARD, so it is negated to put the angle in a
+        # right-handed frame with +y up.  Without that the reported orientation has the
+        # wrong SIGN.
         th = np.arctan2(-ky[m], kx[m])           # wavevector angle CCW from +x, y up
         z = (P[m] * np.exp(2j * th)).sum() / P[m].sum()
         out["R_fft"] = float(abs(z))

@@ -73,6 +73,9 @@ def cmd_select_pair(args):
 def cmd_dem(args):
     from . import dem, grid
     c = _pair(args)
+    if os.path.exists(c.dem) and not args.force:
+        print(f"{c.dem} exists -- kept (--force to rebuild)")
+        return 0
     if not c.ref:
         raise SystemExit(f"no reference granule for {c.dates[0]} in {c.granules}/")
     lon, lat = zip(*grid.bounding_polygon(c.ref))
@@ -84,7 +87,7 @@ def cmd_grid(args):
     from . import grid
     c = _pair(args)
     return grid.main(["--from", c.ref, "--out", c.grid, "--epsg", str(c.grid_epsg),
-                      "--posting", str(c.posting)])
+                      "--posting", str(c.posting)] + (["--force"] if args.force else []))
 
 
 def cmd_glacier_mask(args):
@@ -94,6 +97,9 @@ def cmd_glacier_mask(args):
 
     from . import masks
     c = _pair(args)
+    if os.path.exists(c.glacier_mask) and not args.force:
+        print(f"{c.glacier_mask} exists -- kept (--force to rebuild)")
+        return 0
     gdal.UseExceptions()
     a = argparse.Namespace(cache_dir=c.cache, rgi_region=args.rgi_region,
                            mask_buffer=args.buffer_m)
@@ -191,9 +197,9 @@ def build_parser():
     p.add_argument("--config", metavar="YAML", help="the pair configuration file")
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    def add(name, fn, help_):
+    def add(name, fn, help_, passthrough=False):
         s = sub.add_parser(name, help=help_)
-        s.set_defaults(fn=fn)
+        s.set_defaults(fn=fn, extra=[], passthrough=passthrough)
         return s
 
     s = add("download", cmd_download, "fetch GSLC or RSLC granules from ASF")
@@ -229,37 +235,50 @@ def build_parser():
     s.add_argument("--freq", default="A")
     s.add_argument("--top", type=int, default=5)
 
-    add("dem", cmd_dem, "fetch the DEM covering the pair")
-    add("grid", cmd_grid, "build the output map grid")
+    s = add("dem", cmd_dem, "fetch the DEM covering the pair")
+    s.add_argument("--force", action="store_true", help="rebuild even if it exists")
+    s = add("grid", cmd_grid, "build the output map grid")
+    s.add_argument("--force", action="store_true", help="rebuild even if it exists")
 
     s = add("glacier-mask", cmd_glacier_mask, "rasterise RGI glaciers onto the map grid")
     s.add_argument("--rgi-region", default=None)
     s.add_argument("--buffer-m", type=float, default=160.0)
+    s.add_argument("--force", action="store_true", help="rebuild even if it exists")
 
     s = add("check", cmd_check, "report what would stop this pair")
     s.add_argument("--no-gpu", action="store_true")
 
-    s = add("coregister", cmd_coregister,
-            "geometric coregistration, dense offsets, rubbersheet, refocus, interferogram")
-    s.add_argument("extra", nargs="*", help="extra arguments passed straight through")
+    add("coregister", cmd_coregister,
+        "geometric coregistration, dense offsets, rubbersheet, refocus, interferogram",
+        passthrough=True)
 
-    s = add("screen", cmd_screen, "estimate the phase screens and apply them")
+    s = add("screen", cmd_screen, "estimate the phase screens and apply them",
+            passthrough=True)
     s.add_argument("--routes", nargs="+", default=["hybrid"],
                    choices=["offsets", "split", "hybrid"])
-    s.add_argument("extra", nargs="*")
 
-    s = add("refocus", cmd_refocus, "Doppler-dependent refocusing (--selftest with no argument)")
-    s.add_argument("extra", nargs="*")
+    add("refocus", cmd_refocus,
+        "Doppler-dependent refocusing (--selftest with no argument)", passthrough=True)
 
-    s = add("run", cmd_run, "coregister and screen one pair end to end")
+    s = add("run", cmd_run, "coregister and screen one pair end to end", passthrough=True)
     s.add_argument("--routes", nargs="+", default=["hybrid"],
                    choices=["offsets", "split", "hybrid"])
-    s.add_argument("extra", nargs="*")
     return p
 
 
 def main(argv=None):
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    # stages that declare `extra` forward anything they do not recognise to the tool they
+    # drive; every other subcommand still rejects an unknown argument as a typo
+    args, unknown = parser.parse_known_args(argv)
+    if unknown:
+        if not hasattr(args, "extra"):
+            parser.error(f"unrecognized arguments: {' '.join(unknown)}")
+        args.extra = list(args.extra) + unknown
+    # isce3 pulls in pyre, which parses sys.argv at IMPORT time and claims directives of
+    # its own -- `--config` among them.  Our arguments are parsed by now and every stage is
+    # called with an explicit list, so hide them before anything imports isce3.
+    sys.argv = sys.argv[:1]
     if not hasattr(args, "extra"):
         args.extra = []
     return args.fn(args) or 0
