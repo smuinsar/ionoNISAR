@@ -52,14 +52,11 @@ def lattice_geom(npz_path=None, npy_path=None, search=(64, 64), winsize=(64, 64)
               f"p99 {np.percentile(np.abs(d), 99):.2f}, max {np.abs(d).max():.2f} px")
     ref = rb
     if steer_exclude_px and steer_exclude_px > 0:
-        # Sharp features the smoother attenuated but did not remove are NOT Doppler-dependent
-        # (T087 lattice cols 2250-2500, rows 864-900: a -4.2 px plateau 2.4 km along track with
-        # 300 m edges, no range signature, quarter-band shifts equal to 0.5 px, all quarter-band
-        # coherences ~0.3 -- broadband decorrelation).  Steered by the applied field's smeared
-        # copy of it, the refocus lowered that patch by ~0.1.  So the steering field is the
-        # applied field with such cells cut out and re-interpolated by the same penalised least
-        # squares; both the displaced and the reference term use it, which leaves the band-centre
-        # registration of the feature exactly as the resampler applied it.
+        # Sharp features the smoother attenuated but did not remove are NOT Doppler-dependent --
+        # broadband decorrelation shows no range signature and equal quarter-band shifts -- and
+        # steering on them lowers coherence.  So the steering field is the applied field with
+        # such cells cut out and re-interpolated; both terms use it, leaving the band-centre
+        # registration exactly as the resampler applied it.
         if rb_meas is None:
             raise SystemExit("--steer-exclude-px needs the _rbsheet.npz (its measured `azimuth` field)")
         from scipy.ndimage import median_filter, binary_dilation

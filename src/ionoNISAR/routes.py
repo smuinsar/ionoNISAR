@@ -28,12 +28,9 @@ RUNG_LABEL = {"prerb": "coregistered only",
 SHARED_RUNGS = ("prerb", "rb", "rbc")     # screen-independent: built once, in common/
 
 # The map lattice every product lands on.  It is READ, not restated: the coregistration
-# already chose a grid for this pair (from --stack, --grid-like, or the scene centre) and
-# geocoded its offsets onto it, so that product is the lattice.  A second copy here would
-# have to be kept in step with it by hand, and nothing would notice when it was not.
-# Finer postings are DERIVED from it rather than refitted: 120 divides by 8 to 15 m and the
-# origin is a whole multiple of 15 m, so a 15 m grid nests EXACTLY inside a 120 m one --
-# every coarse cell is 8 x 8 fine cells and the two compare with no interpolation anywhere.
+# already chose a grid for this pair and geocoded its offsets onto it, so that product
+# IS the lattice.  Finer postings are derived from it, never refitted, so they nest
+# exactly and compare with no interpolation.
 BASE = {}
 
 
@@ -241,11 +238,9 @@ def stage_prerb(a, args, win, sec_origin, sec_shape):
     pair0 = dict(fref=os.path.join(dst, "ref.c8"), ref_shape=(na, nr),
                  fsec=os.path.join(dst, "sec.c8"),
                  sec_shape=sec_shape, sec_origin=sec_origin)
-    # coregister_isce3 takes BOTH the offsets it reads (args.scratch/geo2rdr) and the file
-    # it writes (args.scratch/sec_coreg.c8) from args.scratch, so it has to be handed THIS
-    # scratch.  With the caller's args it resamples through the rubbersheeted azimuth.off --
-    # not the private copy this stage exists to build -- and writes the result over
-    # --scratch/sec_coreg.c8, the one input every other rung depends on.
+    # coregister_isce3 takes both the offsets it reads and the file it writes from
+    # args.scratch, so it must be handed THIS scratch.  With the caller's args it would
+    # resample through the rubbersheeted azimuth.off and overwrite the shared sec_coreg.c8.
     prerb_args = argparse.Namespace(**vars(args))
     prerb_args.scratch = dst
     # "--scratch IS NEVER MODIFIED" above is an invariant whose violation is SILENT: a
@@ -320,12 +315,9 @@ def interferogram(a, sec_path, ptag, win, sec_origin, out_dir, carrier=None, scr
         "--ref-h5", a.ref, "--sec-h5", a.sec, "--dem", a.dem,
         "--ref-origin", str(win[0]), str(win[1]),
         "--sec-origin", str(sec_origin[0]), str(sec_origin[1]),
-        # `scratch` is the rung's OWN scratch.  With --rubbersheet-rg off every rung shares
-        # one range.off by symlink, so the flattening is identical and the rung-to-rung
-        # difference stays purely the azimuth rubbersheet and the phase terms.  With it on,
-        # stage_prerb gives prerb a private range.off with the field subtracted, and the
-        # flattening then differs between rungs BY DESIGN -- that difference IS the range
-        # correction, and is why the range rung is scored on fringe rate, not coherence.
+        # `scratch` is the rung's OWN scratch.  Every rung shares one range.off by symlink, so
+        # the flattening is identical and the rung-to-rung difference stays purely the azimuth
+        # rubbersheet and the phase terms.
         "--flatten", "--range-off", os.path.join(scratch, "geo2rdr", "range.off"),
         "--dr0", repr(float(dr0)),
         "--geocode", "--posting", repr(float(a.posting)), "--geogrid", *grid,
@@ -375,17 +367,11 @@ def screen_offsets(a, args, win_d, win):
     from . import coregister as O
     from .screens import offsets as ION
 
-    # THE REBUILD IS NOT BIT-EQUAL TO THE COREGISTRATION'S SCREEN, and cannot be made so
-    # from here.  The coregistration builds its screen AFTER the rubbersheet loop, and
-    # --rubbersheet-az-redense defaults to TRUE, so the field it integrates is a SECOND
-    # ampcor pass measured against the already-rubbersheeted secondary with the applied
-    # field added back.  What lands in the offsets npz -- the only field this route has --
-    # is the FIRST pass.  The two agree closely but not exactly, so prefer the
-    # coregistration's screen, which the second gate below does; the redensed field is in
-    # offsets_<tag>_rbsheet.npz.
-    #
-    # Both reuse gates check provenance, so changing a screen setting on an existing product
-    # REBUILDS rather than silently reusing the old screen under the new settings' name.
+    # THE REBUILD IS NOT BIT-EQUAL TO THE COREGISTRATION'S SCREEN.  That one is built after
+    # the rubbersheet loop, so it integrates a second ampcor pass; the offsets npz holds the
+    # first.  They agree closely but not exactly, so prefer the coregistration's screen.
+    # Both reuse gates check provenance, so changing a screen setting rebuilds rather than
+    # silently reusing the old screen under the new settings' name.
     os.makedirs(a.dir("offsets"), exist_ok=True)
     out_npz = os.path.join(a.dir("offsets"), f"iono_screen_{a.tag}.npz")
     src = os.path.join(a.scratch, f"iono_screen_{a.tag}.npz")
@@ -724,11 +710,10 @@ def parse_args(argv=None):
                    help="local coverage the split low-pass needs before it is trusted, as a "
                         "fraction of the frame's best.  0.05 reaches ~22 km past the data "
                         "edge; raise it to lean on the continuation instead (default 0.05)")
-    # UNWRAPPING A FIELD THAT IS NOT WRAPPED can only invent cycles, and each invented
-    # cycle is 2*pi/|det| of dispersive phase.  The local-median rejection cannot catch it:
-    # the error is a CONSTANT over each connected component the unwrapper mis-labelled, so
-    # inside one the local median is offset too.  Read [diff] |phi_diff| max before
-    # deciding; --no-split-unwrap-diff bounds the estimate at +-pi/|det| instead.
+    # UNWRAPPING A FIELD THAT IS NOT WRAPPED can only invent cycles, each worth 2*pi/|det|
+    # of dispersive phase.  The local-median rejection cannot catch it: the error is
+    # constant over a mis-labelled component.  --no-split-unwrap-diff bounds it at
+    # +-pi/|det| instead.
     g.add_argument("--split-unwrap-diff", action=argparse.BooleanOptionalAction, default=True,
                    help="unwrap the band difference before the 2x2 solve (default on)")
     g.add_argument("--split-unwrap-method", default="snaphu",
@@ -820,14 +805,9 @@ def main(argv=None):
     args = build_args(a, d, a.scratch)
     common = os.path.join(a.out, "common")
 
-    # --- stage 3a: the pre-rubbersheet secondary
-    # stage_prerb costs 47 GB of scratch and a resamp_slc pass.  Normally its ONLY consumer
-    # is the prerb rung, so it is skipped outright once that rung is on disk -- otherwise a
-    # second route would rebuild the pre-rubbersheet secondary just to skip the interferogram
-    # that needed it, which is what makes offsets_scratch_prerb/ look permanently required.
-    #
-    # maialone changes that: it MEASURES on the geometry-only pair, so it needs both the
-    # secondary and the pre-rubbersheet azimuth.off, and it needs them before the screens.
+    # --- stage 3a: the pre-rubbersheet secondary.  It costs a full resamp_slc pass and its
+    # own scratch, and its only consumer is the prerb rung, so it is skipped once that
+    # rung is on disk.
     prerb_done = os.path.exists(os.path.join(common, f"ifg_coh_geo_{a.tag}_prerb.tif"))
     if prerb_done and not a.force_ifg:
         print(f"[prerb] the prerb rung is already built; skipping the pre-rubbersheet "

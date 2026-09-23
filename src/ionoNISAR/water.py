@@ -31,10 +31,8 @@ def download_worldcover_tiles(corners, output_dir='worldcover', year=2021):
     footprint = box(min(lons), min(lats), max(lons), max(lats))
 
     # The tile index is a 3x3-degree lattice named for each tile's lower-left corner, so it
-    # can be computed.  Fetching the grid geojson from S3 was unconditional -- it ran even
-    # when every tile was already cached, which made a fully cached run depend on the network
-    # and killed a 1.5 h coregistration at the last step.  Try the authoritative grid first,
-    # fall back to arithmetic, and say which was used.
+    # can be computed.  Try the authoritative grid first and fall back to arithmetic, so a
+    # fully cached run does not depend on the network.
     tile_names = None
     try:
         print("Downloading WorldCover grid file...")
@@ -93,14 +91,10 @@ def download_worldcover_tiles(corners, output_dir='worldcover', year=2021):
     if len(tile_files) == 1:
         return tile_files[0]
 
-    # Mosaic as a VRT, not a materialised GeoTIFF.  rio_merge reads every tile
-    # into memory at once and writes the union: 12 tiles spanning 12 x 9 degrees
-    # at 10 m is ~13 Gpx, which took 40 GB of RSS and a 13 GB file here.  A VRT
-    # is a few kB of XML, is built instantly, and reprojects identically because
-    # GDAL reads only the windows it needs.
-    #
-    # The name is keyed to the exact tile set: a fixed name silently reuses
-    # another scene's mosaic the moment a second frame is processed.
+    # Mosaic as a VRT, not a materialised GeoTIFF: merging reads every tile into memory and
+    # writes the union, which is tens of GB at 10 m over a frame.  A VRT is a few kB, builds
+    # instantly, and reprojects identically because GDAL reads only the windows it needs.
+    # The name is keyed to the exact tile set, or a second frame silently reuses this one.
     tag = hashlib.md5(",".join(sorted(tile_names)).encode()).hexdigest()[:10]
     merged_file = os.path.join(
         output_dir, f"ESA_WorldCover_10m_{year}_{len(tile_files)}t_{tag}.vrt")

@@ -31,11 +31,9 @@ HLS = _load_cm("hls", os.path.join(SCRIPT_DIR, "hls.cm"))    # unwrapped phase
 
 
 # =====================================================================
-# stretch policy
+# stretch policy: matched on the file stem, longest prefix first, so a name that is a
+# prefix of another still resolves to its own rule
 # =====================================================================
-# Matched on the file's stem, longest prefix first, so "iono_screen_valid" is a flag rather
-# than the "iono_screen" it is a prefix of and "ifg_phase_unw" is unwrapped rather than the
-# "ifg_phase" it is a prefix of.
 UNWRAPPED = ("ifg_unw", "ifg_phase_unw", "unw_", "phi_a_unw", "phi_diff_unw", "nondisp")
 WRAPPED = ("ifg_phase_raw", "ifg_phase_corrected", "ifg_phase", "filt_ifg_phase",
            "ifg_gslc_phase", "phi_diff_ms", "phi_diff")

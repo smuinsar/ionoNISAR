@@ -131,10 +131,8 @@ def load_dem(path):
 
 
 # =====================================================================
-# Goldstein filter + coherence
-# verbatim from gslc_ifg_utils.py:100-252, itself verbatim from
-# the focusing chain.  Do not "tidy" this -- the products in
-# outputs_rbsheet_compare/ were made with exactly these arithmetic steps.
+# Goldstein filter + coherence.  Kept verbatim: do not "tidy" the arithmetic, the
+# delivered products were made with exactly these steps.
 # =====================================================================
 def _kaiser_window_2d(n, beta=2.12):
     """Create a 2D Kaiser window (separable product of 1D Kaiser windows)."""

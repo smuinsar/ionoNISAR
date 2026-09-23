@@ -280,10 +280,9 @@ def main(argv=None):
                 fr = np.asarray(roff[i0:i0 + n, :ml_r * lr]) % 1.0
                 y = y * np.exp(1j * np.interp(fr, ib[0], ib[1])).astype(np.complex64)
         if aoff is not None:
-            # The secondary sample was taken at azimuth position a + delta, so it carries
-            # the SLC's own azimuth carrier evaluated there and ref * conj(sec) keeps
-            # -psi'*delta.  Rotating the secondary by exp(-j psi' delta) puts the carrier
-            # back at the output position, which is what makes resampling phase-neutral.
+            # The secondary sample was taken at a + delta, so it carries the SLC's azimuth carrier
+            # evaluated there and ref * conj(sec) keeps -psi'*delta.  Rotating by exp(-j psi' delta)
+            # puts the carrier back at the output position, making the resampling phase-neutral.
             ao = np.asarray(aoff[i0:i0 + n, :ml_r * lr])
             if az_c is None:
                 psi = a.az_carrier
@@ -312,16 +311,13 @@ def main(argv=None):
     screen = None
     if a.iono_screen:
         from .screens import offsets as ION
-        # Subtracted BEFORE the filter and the unwrapping: Goldstein on a field that is
-        # still ramping smears the very structure being taken out, and an unwrapper handed
-        # a frame-spanning ramp has to carry it through every fringe.  A pure rotation, so
-        # coh / p1 / p2 stay exactly as measured.
+        # Subtracted BEFORE filtering and unwrapping: a filter smears a field that is still
+        # ramping, and an unwrapper has to carry the ramp through every fringe.  A pure
+        # rotation, so coherence is unchanged.
         screen, _ = ION.to_lattice(a.iono_screen, a.ref_origin, a.looks, ifg.shape)
         if a.iono_screen_calibrate:
-            # the gain fit on THIS pair, measured before the screen is removed:
-            # what the applied screen is short by.  A diagnostic, not an action -- it never
-            # changes what is subtracted, because a gain fitted to the same interferogram it
-            # then corrects is circular unless a human looks at it and sets it deliberately.
+            # the gain fit on THIS pair, before the screen is removed: a diagnostic only.  A gain
+            # fitted to the interferogram it then corrects is circular unless a human sets it.
             al, r, n = ION.fit_screen_gain(np.angle(ifg), coh, screen,
                                            block=a.iono_calib_block)
             print(f"[iono/gain] fit on {n} block pairs "
@@ -347,10 +343,9 @@ def main(argv=None):
     if a.filter:
         from ._utils import raster as B
         print(f"Goldstein filter: alpha {a.filter_alpha}, fft {a.filter_win}", flush=True)
-        # returns its own coherence estimate from the filtered spectrum; keep the
-        # multilook coherence as the product, it is the one with a known number of looks.
-        # Filters `disp`, not `ifg`: with an ionospheric screen subtracted the two differ,
-        # and filtering `ifg` would silently throw the correction away.
+        # the filter returns its own coherence; keep the multilook one, whose look count is
+        # known.  Filters `disp`, not `ifg` -- with a screen subtracted the two differ, and
+        # filtering `ifg` would throw the correction away.
         disp, _ = B.goldstein_filter_fast(disp, alpha=a.filter_alpha, nfft=a.filter_win,
                                           cc_win=a.filter_coh_win)
 

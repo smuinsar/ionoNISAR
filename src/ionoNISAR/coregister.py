@@ -92,12 +92,9 @@ def load_slc(path, freq="A", pol="HH"):
                 float(g["starting_range"]), float(g["range_pixel_spacing"]), side,
                 int(g["length"]), int(g["width"]), isce3.core.DateTime(str(g["ref_epoch"])))
             orbit = isce3.core.Orbit.load_from_h5(h["orbit"])
-            # Native Doppler centroid of the DATA.  The image grid is zero-Doppler, so the
-            # geometry (rdr2geo / geo2rdr) uses a zero LUT -- but the samples still carry an
-            # azimuth carrier at fd, and resampling has to strip it before interpolating and
-            # put it back after.  On this pair fd is 983 Hz against a PRF of 1910, i.e. 0.51
-            # of a pixel: hand the resampler a zero Doppler instead and the resampled image
-            # comes out with an azimuth phase error that walks the correlation peak.
+            # Native Doppler centroid of the DATA.  The image grid is zero-Doppler, so the geometry
+            # uses a zero LUT, but the samples still carry an azimuth carrier at fd: the resampler
+            # must strip it before interpolating and restore it after, or the peak walks.
             dop = isce3.core.LUT2d(h["dop/x"][()], h["dop/y"][()], h["dop/data"][()])
             dop.bounds_error = False
             dset = "slc"
@@ -451,11 +448,9 @@ def coregister_isce3(args, pair, ref_meta, sec_meta, win, dem_raster,
         print(f"[coreg] rdr2geo on the reference grid ({na} x {nr}) ...", flush=True)
         r2g = Rdr2Geo(ref_grid, ref_meta["orbit"], ellip, zero_lut,
                       lines_per_block=args.coreg_lines_per_tile)
-        # The rasters are created here, exactly as nisar.workflows.rdr2geo does, and NOT
-        # left to topo(dem, outdir): that convenience overload builds them transposed in
-        # this isce3 build -- give it a grid of length 300, width 100 and it makes a
-        # 300x100 raster, then reports "(0,0) of size 100x300 on raster of 300x100" for
-        # every block and writes a transposed, mostly-invalid product.
+        # The rasters are created here rather than left to topo(dem, outdir): that convenience
+        # overload builds them TRANSPOSED in this isce3 build and writes a mostly-invalid
+        # product.
         layers = [("x", gdal.GDT_Float64), ("y", gdal.GDT_Float64), ("z", gdal.GDT_Float64),
                   ("incidence", gdal.GDT_Float32), ("heading", gdal.GDT_Float32),
                   ("localIncidence", gdal.GDT_Float32), ("localPsi", gdal.GDT_Float32),
@@ -504,11 +499,9 @@ def coregister_isce3(args, pair, ref_meta, sec_meta, win, dem_raster,
                         sec_grid.starting_range,
                         sec_grid.range_pixel_spacing,
                         sec_grid.sensing_start, sec_grid.prf, sec_grid.wavelength)
-        # Tile height from the WIDTH, not a constant: the CUDA resampler holds roughly
-        # chip_size^2 (9x9) complex values per output pixel, so memory scales with
-        # tile_lines * width.  4096 lines is fine at the 7438-sample width of an AOI (~20 GB)
-        # and asks for ~140 GB on the 52664-sample full frame -- which is exactly how this
-        # first failed: "cudaErrorMemoryAllocation: out of memory".
+        # Tile height from the WIDTH, not a constant: the CUDA resampler holds roughly chip_size^2
+        # complex values per output pixel, so memory scales with tile_lines * width.  A fixed
+        # height that fits an AOI asks for hundreds of GB on a full frame.
         lpt = args.resamp_lines_per_tile or max(64, int(2 ** 24 / max(nr, 1)))
         resamp.lines_per_tile = lpt
         print(f"[coreg] resamp tile height {lpt} lines ({lpt * nr / 1e6:.1f} Mpx per tile)")
@@ -722,12 +715,9 @@ def make_interferogram(args, pair, ref_meta, sec_meta, win, gg=None, screen=None
     argv += (["--flatten", "--range-off", roff, "--dr0", repr(float(dr0))] if flat
              else ["--no-flatten"])
 
-    # The other half of sampled_doppler's problem.  With the LUT folded the resampler now
-    # reproduces s(a + delta) faithfully -- which means the secondary sample still carries
-    # the SLC's azimuth carrier evaluated at a + delta, and ref * conj(sec) keeps
-    # -psi' * delta.  psi' is -2.23 rad/px here, delta is the ionospheric misregistration,
-    # so that is 2.3 rad for every pixel of it and it is not propagation phase.  Hand the
-    # interferogram the field and the carrier and it comes out; see --az-carrier.
+    # The other half of sampled_doppler's problem.  With the LUT folded, the secondary sample
+    # still carries the SLC's azimuth carrier at a + delta, so ref * conj(sec) keeps
+    # -psi' * delta -- not propagation phase.  The interferogram removes it; see --az-carrier.
     aoff = os.path.join(args.scratch, "geo2rdr", "azimuth.off")
     if os.path.exists(aoff):
         d2 = sampled_doppler(sec_meta["dop"], r2.prf)
@@ -1241,19 +1231,16 @@ def parse_args(argv=None):
                         "refocus applies, per Doppler component, the applied field seen at "
                         "that sub-aperture's pierce point, displaced along track by "
                         "KM * f / bandwidth.  'auto' calibrates KM on the frame's steepest "
-                        "blocks (8 km there, an ionosphere near 275 km) and does nothing "
-                        "when that gains under 0.01; a number uses it as is.  Measured on "
-                        "the frame: steep mask 0.41 -> 0.53, rim 0.50 -> 0.55, quiet ground "
-                        "unchanged.  Default 0 = off, so T121/T135 runs are untouched; "
-                        "turn it on per pair through COREG_EXTRA")
+                        "blocks and does nothing when that gains under 0.01; a number uses "
+                        "it as is.  It raises coherence where the applied field is steep and "
+                        "leaves quiet ground unchanged.  Default 0 = off")
     g.add_argument("--refocus-gain", default="auto", metavar="auto|G",
                    help="'auto' (default) tests a local gain 0..1 on the refocus phase in "
                         "every --refocus-block x 2048 block whose predicted spread exceeds "
                         "--refocus-gain-min-spread px and keeps the one with the best "
-                        "coherence, so a feature that is NOT Doppler-dependent -- on T087 a "
-                        "-4.2 px plateau 2.4 km long with all quarter-band coherences ~0.3 -- "
-                        "is left alone instead of being made worse; a number applies that "
-                        "gain everywhere")
+                        "coherence, so a feature that is NOT Doppler-dependent -- broadband "
+                        "decorrelation, with equal quarter-band shifts -- is left alone rather "
+                        "than made worse; a number applies that gain everywhere")
     g.add_argument("--refocus-gain-min-spread", type=float, default=1.0, metavar="PX")
     g.add_argument("--refocus-block", type=int, default=240, metavar="LINES",
                    help="azimuth block of the Doppler-domain filter (default 240)")
@@ -1741,11 +1728,9 @@ def main(argv=None):
         with timed("dense ampcor"):
             az, rg, snr = run_ampcor(args, pair, tag,
                                      gross_in_crop=(0, 0) if args.coreg != "none" else None)
-        # WHAT THIS npz MEANS, on every path: THE OFFSET RELATIVE TO GEOMETRY.  Every
-        # ionospheric route integrates it, so the meaning cannot depend on how the run was
-        # started.  A RESUMED run reuses a sec_coreg.c8 that an earlier run already
-        # rubbersheeted, so the dense pass above measured the RESIDUAL; add back whatever is
-        # already applied.  A fresh run reads zeros here and nothing moves.
+        # WHAT THIS npz MEANS, on every path: THE OFFSET RELATIVE TO GEOMETRY.  A resumed run
+        # reuses a sec_coreg.c8 that was already rubbersheeted, so the dense pass measured the
+        # RESIDUAL; add back whatever is applied.  A fresh run reads zeros and nothing moves.
         g2r0 = os.path.join(args.scratch, "geo2rdr")
         why = ("the dense pass measured the residual on top of it, so the npz gets that "
                "field plus this one -- the offset relative to geometry")
@@ -1789,16 +1774,11 @@ def main(argv=None):
     keep, azf, rgf, snrf, filled = clean_lattice(args, ref, demI, win, npz, gg, gt,
                                                  az, rg, snr, smooth_out=smooth)
 
-    # --- azimuth rubbersheet.  The coregistration loop above can only take out a CONSTANT,
-    # so a per-pixel azimuth shift -- which is what an along-track TEC gradient produces --
-    # survives it and is still in sec_coreg.c8 when the interferogram is formed.  It costs
-    # coherence directly, as 1 - |shift|/resolution.  Folding the measured field back into
-    # geo2rdr's azimuth.off and resampling again is what recovers it.
-    #
-    # This DOES touch the interferometric phase: the SLCs carry an azimuth carrier and
-    # resamp_slc re-ramps about the INPUT position, so every pixel of shift puts 2*pi*fd/PRF
-    # into the interferogram.  make_interferogram takes it back out (--az-carrier); the
-    # ionospheric PHASE screen is a third, separate correction (--iono-screen).
+    # --- azimuth rubbersheet.  The loop above removes only a CONSTANT, so a per-pixel
+    # azimuth shift survives into sec_coreg.c8 and costs coherence as 1 - |shift|/resolution.
+    # Folding the measured field into geo2rdr's azimuth.off and resampling recovers it.
+    # This DOES touch the phase: resamp_slc re-ramps about the INPUT position, so every
+    # pixel of shift adds 2*pi*fd/PRF.  --az-carrier removes it; the screen is separate.
     if args.rubbersheet_az and pair is not None:
         if pair0 is None:
             print(f"[rbsheet] skipped: the raw secondary is not in {args.scratch} -- "
@@ -1807,23 +1787,18 @@ def main(argv=None):
             g2r_dir = os.path.join(args.scratch, "geo2rdr")
             applied = rubbersheet_state(g2r_dir, az.shape)
             refocus_state = None
-            # Turning either flag off does not undo what a previous run baked into that
-            # raster, and nothing else would ever take it out again -- the run would
-            # silently inherit a corrupted resampling (azimuth) or flattening (range).
-            # Un-apply it here, the same increment bookkeeping as everywhere else.  This
-            # is what makes a SWEEP over rubbersheet configurations inside one scratch
-            # exact rather than cumulative.
+            # Turning the flag off does not undo what a previous run baked into that raster, and
+            # nothing else would remove it -- the run would silently inherit a corrupted resampling.
+            # Un-apply it here, so a sweep inside one scratch is exact rather than cumulative.
             if applied.any() and args.reuse_offsets:
                 print("[rbsheet] WARNING: azimuth.off already carries a rubbersheet, but "
                       "these offsets came out of an npz and were measured against a "
                       "different secondary.  Re-run without --reuse-offsets, or with "
                       "--force-coreg, if that was not intended")
             for it in range(1, args.rubbersheet_az + 1):
-                # The smoother's own surface, not the measured field: handing resamp_slc
-                # per-window correlation noise would degrade the registration it is meant
-                # to improve.  What the correlator reports is always the residual on top of
-                # whatever azimuth.off already carries, so this IS the increment -- and
-                # `applied` is the running total relative to pure geometry.
+                # The smoother's surface, not the measured field: handing resamp_slc per-window noise
+                # would degrade the registration.  The correlator always reports the residual on top of
+                # azimuth.off, so this IS the increment, and `applied` is the running total.
                 inc = np.nan_to_num(smooth.get("azimuth", azf)).astype(np.float32)
                 with timed(f"azimuth rubbersheet {it}"):
                     upsample_add(os.path.join(g2r_dir, "azimuth.off"), inc, args)
@@ -1847,13 +1822,10 @@ def main(argv=None):
                                                              gg, gt, az, rg, snr,
                                                              smooth_out=smooth)
 
-            # --refocus-km: the resample registered the band centre; this registers the
-            # rest of the Doppler band, AFTER the redense pass and not before it.  Running
-            # the correlator on the refocused secondary makes its sub-pixel peak react to
-            # the reshaped impulse response rather than to a shift, so the redense field
-            # stays measured on the resampled secondary and the offsets products are
-            # unchanged; the interferogram and everything reading sec_coreg.c8 get the
-            # refocused one.
+            # --refocus-km: the resample registered the band centre, this registers the rest of the
+            # Doppler band, AFTER the redense pass.  The correlator on a refocused secondary reacts
+            # to the reshaped impulse response, so the redense field stays measured on the resampled
+            # one; the interferogram and everything reading sec_coreg.c8 get the refocused one.
             if str(args.refocus_km).strip().lower() not in ("0", "0.0", "", "off", "none"):
                 if not args.rubbersheet_az:
                     print("[refocus] skipped: --refocus-km needs the azimuth rubbersheet "
@@ -1862,13 +1834,10 @@ def main(argv=None):
                     with timed("refocus (Doppler-dependent azimuth)"):
                         refocus_state = refocus_secondary(args, pair, ref, sec, win, applied)
 
-            # The product stays what it has always been: the offset RELATIVE TO GEOMETRY.
-            # After a redense pass the correlator was measuring against the rubbersheeted
-            # secondary, so what it reported is the residual on top of `applied` and the
-            # applied field has to go back in.  Without this the azimuth product would read
-            # ~0 everywhere and the ionospheric signal would have been deleted from the
-            # measurement rather than from the interferogram.  Without --redense nothing is
-            # re-measured, so `az` is still the field relative to geometry and is left be.
+            # The product stays the offset RELATIVE TO GEOMETRY.  After a redense pass the correlator
+            # measured against the rubbersheeted secondary, so `applied` has to go back in or the
+            # azimuth product reads ~0 and the signal is deleted from the measurement rather than
+            # from the interferogram.  Without --redense nothing is re-measured, so `az` stands.
             if args.rubbersheet_az_redense:
                 az = az + applied
                 azf = azf + applied
@@ -1898,17 +1867,10 @@ def main(argv=None):
             with timed("interferogram"):
                 make_interferogram(args, pair, ref, sec, win, gg=gg, screen=screen)
 
-    # --- radar-domain view of the CLEANED field, plus the axis self-certification.
-    #
-    # The geocoded quicklook is on EPSG:3413, which at this longitude rotates the grid by
-    # about -105 deg: the range axis lands near-vertical on the page and along-track
-    # near-horizontal.  So range-elongated bands in the AZIMUTH component read as vertical
-    # stripes and look like a range field.  They are not.  In radar geometry there is no
-    # rotation -- axis 0 IS azimuth, axis 1 IS range -- and a band running along this
-    # figure's x axis is range-elongated by definition.  Look HERE when the labels are
-    # doubted; the raw figure written earlier cannot settle it, because it is plotted
-    # before --snr-min and its p98 stretch is set by the failed matches, leaving the +-1 px
-    # signal a uniform wash.
+    # --- radar-domain view of the CLEANED field, plus the axis self-certification.  The
+    # geocoded quicklook is projected, which rotates the axes and can make range-elongated
+    # bands in the AZIMUTH component read as a range field.  In radar geometry axis 0 IS
+    # azimuth and axis 1 IS range, so look here when the labels are doubted.
     _meas = np.where(keep, np.float32(1.0), np.float32(np.nan))
     with timed("plot (radar domain, cleaned)"):
         plot_panels([(azf * _meas, "azimuth offset (measured cells)", "px", False),

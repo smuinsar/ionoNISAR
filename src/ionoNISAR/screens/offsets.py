@@ -294,41 +294,29 @@ def screen_from_offsets(args, ref_meta, win, az, keep, filled=None, az_filled=No
               f"and beyond ~16 km that screen is worse than no screen")
     phi -= phi.mean(axis=0, keepdims=True)          # the per-column datum; see the docstring
 
-    # The along-track derivative of the interferogram can be written as a linear function
-    # of the azimuth-shift observable, dphi/daz = alpha * phi_shift + beta, and that is what
-    # is integrated.  Everything above this line is that integrand with alpha pinned to its
-    # theoretical value of 1, so `gain` is alpha and 1.0 leaves the screen unscaled.  The
-    # constant beta is not carried: it is per-column, and the per-column datum on the line
-    # above already removes any such constant.  The gain is an empirical calibration, so it
-    # is off by default.
+    # The along-track derivative of the interferogram is a linear function of the
+    # azimuth-shift observable, dphi/daz = alpha * phi_shift + beta, and that is what is
+    # integrated, with alpha pinned to 1 unless `gain` says otherwise.  beta is per-column
+    # and the datum above already removes it.
     gain = float(getattr(args, "iono_screen_gain", 1.0) or 1.0)
     if gain != 1.0:
         phi *= gain
         print(f"[iono] gain alpha = {gain:g} applied to the integrated screen "
               f"(1.0 = the theoretical constant alone)")
 
-    # VALIDITY, and only validity: a gap narrower than --iono-screen-max-gap has had its
-    # integrand invented by carry_across_range, so `filled` is what says where the screen
-    # was measured rather than continued.  It does NOT mask the screen -- blanking at every
-    # glacier rim injects a step the interferogram does not have, and masking the integrand
-    # before the cumsum propagates a hole down the whole column.
+    # VALIDITY, and only validity: a gap narrower than --iono-screen-max-gap had its
+    # integrand invented, so `filled` marks measured against continued.  It does NOT mask
+    # the screen -- blanking at a rim injects a step, and masking before the cumsum
+    # propagates a hole down the column.
     gap = distance_transform_edt(~keep, sampling=(da, dr))
     reach = np.isfinite(sm) & (gap <= args.iono_screen_max_gap * 1000.0)
     valid = reach
     if filled is not None and np.shape(filled) == np.shape(valid):
         drop = np.asarray(filled, bool)
-        # BOTH numbers, always, because they answer different questions and quoting one as
-        # "coverage" has caused real confusion:
-        #   reach  -- where the screen is a LOW-PASS OF MEASUREMENTS rather than a flat
-        #             continuation.  This is what the correction is built from.
-        #   valid  -- reach minus every cell whose offset came out of the hole-fill.
-        # The second reads below the first, because the 2 km low-pass
-        # reaches ~28 points past `keep` and the fill flag then revokes exactly that.
-        #
-        # It also makes offsets and MAI comparable at last: MAI calls this function with no
-        # `filled` at all, so it reports the `reach` number
-        # -- 89 % against offsets' 61 % on the same field.  That gap was a reporting policy,
-        # not a difference in the measurement, and it was read as one more than once.
+        # BOTH numbers, always, because they answer different questions:
+        #   reach  -- where the screen is a LOW-PASS OF MEASUREMENTS, not a flat continuation
+        #   valid  -- reach minus every cell whose offset came out of the hole-fill
+        # `valid` reads below `reach`, and a caller that passes no `filled` reports `reach`.
         if getattr(args, "iono_screen_count_filled", False):
             print(f"[iono] validity: {100 * reach.mean():.1f} % reached by the "
                   f"{args.iono_screen_max_gap:g} km gap test; counting filled cells as valid "

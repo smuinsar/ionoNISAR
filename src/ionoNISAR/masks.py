@@ -100,10 +100,7 @@ def rgi_raster(transform, shape, crs, bbox, args):
     parts = []
     for reg in regions:
         stem = f"RGI2000-v7.0-C-{reg}"
-        # /vsizip//vsicurl reads the shapefile straight out of the remote zip -- the
-        # Alaska region is 70 MB and takes ~6 s, so there is nothing to download.
-        # (The "global" zip is not a global shapefile, it is these same 19 regional
-        # zips bundled; reading one through the two nested zips took ~200 s.)
+        # read straight out of the remote zip; nothing is downloaded
         g = gpd.read_file(f"/vsizip//vsicurl/{RGI_DIR}{stem}.zip/{stem}.shp",
                           bbox=bbox, engine="pyogrio")
         print(f"[mask] RGI {reg}: {len(g)} glacier complexes in the footprint")
@@ -294,11 +291,8 @@ def reject_outliers(az, rg, keep, se_a, se_r, k, block=8):
     for name, v in (("azimuth", az), ("range", rg)):
         ok = keep & ~bad
         w = np.where(ok, v, np.nan)
-        # Block median AND block spread, both on the same coarse grid.  A single
-        # frame-wide sigma does not work: the scatter is a few hundredths of a pixel over
-        # smooth ground and much larger in the mountains, so a global threshold set by the
-        # quiet majority cuts deep into good data -- it threw away 19 % of the frame
-        # before this was made local.
+        # Block median AND spread on the same coarse grid: the scatter varies across the
+        # frame, so one frame-wide sigma cuts into good data.
         blocks = _blockwise(w, block)
         bm = _upsample(np.nanmedian(blocks, axis=(1, 3)), block, w.shape)
         r = v - bm
@@ -424,33 +418,13 @@ def fill_priors(args, layers, keep, threshold=0.10, prior_from=None):
             out[name] = (1.0, min(trust, flat) if flat else trust, 0.0)
             continue
         ra, rr, tilt, R_fft = measure_aniso(v, keep, threshold)
-        # NO STRUCTURE AT ALL is not the same as NO DIRECTION.  The second fill pass runs on
-        # the RESIDUAL, whose signal the rubbersheet has already taken out -- it
-        # spans -0.19 .. +0.20 px, so the structure function never reaches the threshold and
-        # both reaches come back inf.  That fell through to the isotropic fallback and tripped
-        # the FLAT_ELONG branch below, collapsing the azimuth trust radius from 8 km to 1.5 km
-        # and fading 5.19 % of the lattice into regional_level -- a pull-push pyramid, whose
-        # block structure is visible as lumps along the bands over the icefields.  A field with
-        # no structure above the threshold cannot run away, so the short radius buys nothing
-        # and the fade only injects structure: measured, it doubled |laplacian| p99 inside the
-        # fill (0.00039 -> 0.00080) at identical p99 and max.  Keep the full radius.
+        # A field with no structure above the threshold cannot run away, so keep the full
+        # trust radius instead of falling back to the short isotropic one.
         featureless = not (np.isfinite(ra) or np.isfinite(rr))
         raw = (float(rr / ra) if np.isfinite(rr) and np.isfinite(ra) and ra > 0 else 1.0)
-        # AND INHERIT THE PRIOR, because a featureless field cannot supply one.  A second
-        # fill pass sees the RESIDUAL of the first, which is noise and therefore isotropic,
-        # so measuring the prior there would fall back to 1.0 and cross the holes
-        # isotropically -- which is what draws round lobes across a range-elongated band.
-        # The anisotropy belongs to the FIELD, so the pass that can still see it measures
-        # it and carries the number forward on `args`, which the caller reuses across passes.
-        #
-        # A RESUMED RUN HAS NOTHING TO INHERIT FROM, and that is a third case.
-        # `_fill_aniso_seen` lives on `args`, so it survives only inside one process; over a
-        # kept scratch the rubbersheet is already folded into geo2rdr/azimuth.off, so the
-        # FIRST pass of the new process is already looking at the residual.  There, measure
-        # the prior on the field the residual is a residual OF: `prior_from[name]` = this
-        # pass's field plus what the rubbersheet already applied, which a fresh run supplies
-        # as zeros and therefore never reaches this branch.  Same estimator, same threshold;
-        # only the array differs.
+        # Inherit the prior: a second pass sees the residual, which is isotropic, so measuring
+        # there would cross the holes isotropically.  A resumed run has no earlier pass to
+        # inherit from and measures on this pass's field plus the applied rubbersheet.
         cache = getattr(args, "_fill_aniso_seen", None)
         if cache is None:
             cache = {}
@@ -502,16 +476,9 @@ def fill_holes(azf, rgf, snrf, keep, args, smooth_out=None, cell=None, prior_fro
     from ._utils.fill import fill as fill_method
     from ._utils.oriented import oriented_fill, to_band_frame, from_band_frame
 
-    # cutoff wavelength -> penalty: the DCT transfer is 1/(1 + s*lambda^2), whose
-    # half-power point sits near a wavelength of 2*pi*s**0.25 samples.
-    #
-    # One scale, not two, WITHIN the trust radius.  Blending to a much longer scale looked
-    # like the obvious guard against the fill drifting, and inside a hole it can reach
-    # across it is wrong: withholding a 150-sample disc of real data and scoring against it,
-    # the single scale reconstructed the deepest cells to 0.15 px and the blend to 0.72 px,
-    # because flattening a gap interior towards the regional level throws away the trend the
-    # rim genuinely constrains.  That holds where the rim can be checked; --fill-trust-km is
-    # about the distance where it cannot.  See the docstring.
+    # cutoff wavelength -> penalty: the DCT transfer is 1/(1 + s*lambda^2), half-power
+    # near a wavelength of 2*pi*s**0.25 samples.  One scale inside the trust radius;
+    # --fill-trust-km covers the distance where the rim cannot be checked.
     s = args.fill_s if args.fill_s else (args.fill_cutoff / (2 * np.pi)) ** 4
     print(f"[rdr-fill] cutoff {args.fill_cutoff:g} samples -> s={s:.4g}", flush=True)
 
@@ -536,14 +503,9 @@ def fill_holes(azf, rgf, snrf, keep, args, smooth_out=None, cell=None, prior_fro
             rejected = rejected | info["rejected"]
         out.append(z)
 
-    # Measured samples the robust fit could not explain -- the failed matches that sit at
-    # the +-search limit and cleared --snr-min -- are holes, not data.  They are the reason
-    # single cells of +-100 px survive next to a clean field.
-    #
-    # EVERY channel's flags, not just the azimuth one: a window can fail in range while its
-    # azimuth partner is clean.  regional_level is a convex combination of what it is given,
-    # so a surviving outlier cannot be averaged away -- it sets the level the trust fade
-    # then blends toward.
+    # Windows that failed at the search limit but cleared --snr-min are holes, not data.
+    # Every channel's flags count: regional_level is a convex combination, so a surviving
+    # outlier sets the level the trust fade blends toward.
     good = keep & ~(rejected if args.fill_reject else np.zeros_like(keep))
     if args.fill_reject:
         share = ", ".join(f"{n} {100 * (keep & r).mean():.2f} %"
@@ -552,23 +514,11 @@ def fill_holes(azf, rgf, snrf, keep, args, smooth_out=None, cell=None, prior_fro
               f"unexplainable ({100 * (keep & rejected).mean():.2f} % of the lattice, union "
               f"over the channels: {share}) and filled instead")
 
-    # TWO SCALES (--fill-hole-cutoff).  One penalty cannot serve both places.  Where there
-    # are measurements the surface has to FOLLOW them, which a frame carrying a narrow,
-    # steep streak needs a stiff-enough fit to do.  Where there are none it has to be HELD:
-    # that same penalty lets the continuation carry a noisy rim slope kilometres into a
-    # glacier basin.  So beyond --fill-hole-km of the nearest good window the surface is
-    # faded into a second fit at --fill-hole-cutoff / --fill-hole-robust.  The weight is
-    # exp(-(d / km)^2) on the ISOTROPIC distance in metres, so a few-cell gap inside a
-    # streak stays with the data surface and the interior of a basin does not.
-    #
-    # BULB CHECK (--fill-hole-cutoff auto, the default).  Over-reach into a hole shows up
-    # only in the applied-field quicklook, so the hand-over is decided from a measurement
-    # rather than remembered per frame: fit the robust surface, and if the data surface
-    # leaves it by more than --fill-bulb-px anywhere deeper than BULB_DEPTH_KM into a hole,
-    # hand the holes over; if not, say so and leave the user's fill alone.  With the default
-    # fill the two surfaces are the same fit, so the check is a declared no-op at zero cost.
-    # The verdict is the AZIMUTH channel's -- the one that is resampled -- and applies to
-    # all three, so the log carries one line to read.
+    # Two scales: within --fill-hole-km of a good window the surface follows the data,
+    # beyond it fades into a second stiffer fit, weighted exp(-(d/km)^2) on isotropic
+    # distance.  --fill-hole-cutoff auto hands the holes over only if the data surface
+    # leaves the robust one by more than --fill-bulb-px deeper than BULB_DEPTH_KM into
+    # a hole.  The verdict is the azimuth channel's and applies to all three.
     hole = getattr(args, "fill_hole_cutoff", None)
     auto = isinstance(hole, str) and hole.lower() == "auto"
     if auto:
@@ -629,26 +579,11 @@ def fill_holes(azf, rgf, snrf, keep, args, smooth_out=None, cell=None, prior_fro
     if any(p[1] > 0 for p in prior.values()) and cell is not None:
         from scipy.ndimage import distance_transform_edt
 
-        # distance to the nearest TRUSTED sample -- `good`, not `keep`, so a window the
-        # robust fit threw out does not certify the cells around it.
-        #
-        # The RULER has to match the fill, AND IT IS PER CHANNEL.  With an anisotropic
-        # penalty the rim's information reaches sqrt(aniso) times further along range, so
-        # depth measured in plain metres fences off cells the fill can still reach -- and
-        # fences them into regional_level(), which is isotropic and would put the circular
-        # blob straight back.  For the AZIMUTH channel on this frame the plain ruler puts
-        # 0.56 % of the lattice past an 8 km trust radius and the stretched one 0.02 %:
-        # the difference is the deep interior of the icefields, which is exactly where the
-        # answer matters.
-        #
-        # But the RANGE channel measures 1.5 : 1, not 12 : 1 -- a single bilinear ramp with
-        # no bands in it -- so stretching ITS ruler by sqrt(12) turned an 8 km fence into a
-        # 28 km one that never fired, and the solver extrapolated freely into the icefield
-        # interiors with nothing to constrain it.  That was the elliptical lobe in
-        # offset_range_*_px.png.  One aniso per channel, one ruler per channel.
-        #
-        # Scale the LONG axis down, never the short one up, so `trust` keeps its meaning
-        # in kilometres of the direction the fill is actually weakest in.
+        # Distance to the nearest TRUSTED sample (`good`, not `keep`).  The ruler is stretched
+        # by sqrt(aniso) PER CHANNEL, because the rim's information reaches that much further
+        # along the fill's long axis; a mismatched ruler fences cells the fill could still
+        # reach into regional_level(), which is isotropic.  Scale the long axis down, never
+        # the short one up.
         notes, dcache = [], {}
         for k, (name, v) in enumerate(layers):
             aniso, trust, tilt = prior[name]
@@ -661,12 +596,7 @@ def fill_holes(azf, rgf, snrf, keep, args, smooth_out=None, cell=None, prior_fro
                 samp = ((cell[0], cell[1] / stretch) if stretch >= 1.0
                         else (cell[0] * stretch, cell[1]))
                 if tilt:
-                    # THE RULER HAS TO LIE ALONG THE BANDS TOO.  It is stretched by
-                    # sqrt(aniso) because the rim's information reaches that much further
-                    # along the fill's long axis -- if that axis is tilted and the ruler is
-                    # not, the fence fires exactly where the tilted fill is still valid, and
-                    # fences those cells into regional_level(), which is isotropic and puts
-                    # the round blob straight back.
+                    # the ruler follows the tilt too, for the same reason
                     _, gv, solid = to_band_frame(good.astype(np.float64), good, tilt)
                     dd = distance_transform_edt(~(gv & solid), sampling=samp) / 1000.0
                     dcache[key] = from_band_frame(dd, tilt, good.shape)

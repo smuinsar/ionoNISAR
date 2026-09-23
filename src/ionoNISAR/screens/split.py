@@ -490,11 +490,8 @@ def solve_split(args, pa, pb, ca, cb, f0, f1, gt, epsg, out_dir, tag):
           f"(inherent to the lever; --iono-filter-km buys back looks instead)")
 
     valid = np.isfinite(pa) & np.isfinite(pb) & np.isfinite(ca) & np.isfinite(cb)
-    # ONE THRESHOLD FOR TWO UNEQUAL LOOK COUNTS.  looks_for matches the GROUND cell, and B's
-    # range spacing is 8x A's, so B carries an eighth of A's samples per cell.  The
-    # zero-signal coherence floor is 0.886/sqrt(N), which differs between the bands, so one
-    # threshold is not the same statement about both.  --coh-thresh-b exists so the question
-    # can be re-asked per frame; the default is --coh-thresh for both.
+    # One threshold, two unequal look counts: B carries an eighth of A's samples per cell,
+    # so their zero-signal floors differ.  --coh-thresh-b re-asks this per frame.
     tb = args.coh_thresh if args.coh_thresh_b is None else args.coh_thresh_b
     mask = valid & (ca >= args.coh_thresh) & (cb >= tb)
     print(f"[mask] valid in both bands {100 * valid.mean():.1f} %, coherent in both "
@@ -520,11 +517,9 @@ def solve_split(args, pa, pb, ca, cb, f0, f1, gt, epsg, out_dir, tag):
             gm = warp_to_grid(args.glacier_mask, gt, epsg, mask.shape)
         ice = np.isfinite(gm) & (gm > 0.5)
 
-    # --- the band difference, complex-averaged BEFORE it is phased.
-    # A and B are different range spectra, so their speckle realisations are largely
-    # independent and the per-pixel arg(I_A conj(I_B)) is close to uniform random even where
-    # each band is individually coherent.  The dispersive signal is only ~4 % of the total
-    # phase, so it emerges only after the random part is averaged down.
+    # --- the band difference, complex-averaged BEFORE it is phased.  A and B are different
+    # range spectra, so per-pixel arg(I_A conj(I_B)) is near-random even where each band is
+    # coherent; the dispersive signal emerges only once that is averaged down.
     dw = args.diff_win
     if args.diff_weight == "coherence":
         # the self-band construction: weight each phasor by
@@ -543,15 +538,9 @@ def solve_split(args, pa, pb, ca, cb, f0, f1, gt, epsg, out_dir, tag):
         phi_diff = np.angle(zs)
         coh_diff = np.clip(np.abs(zs) / np.maximum(uniform_filter(np.abs(z), dw), 1e-12), 0, 1)
 
-    # DIAGNOSTIC (no behaviour change).  `z` above is a UNIT phasor on all of `valid`, so a
-    # fjord pixel at coherence 0.02 pushes exactly as hard as a land pixel at 0.95, and
-    # `valid` is only "the geocoder wrote something here" -- this route builds its band
-    # interferograms with no water mask and applies the ice gate BELOW, i.e. after this
-    # average.  So decorrelated ground is injected (dw-1)/2 px into the surrounding land.
-    # the self-band estimator does not do this (it weights by min(coh)), and
-    # splitA does not show the fringe band.  Measure the cost directly: build the weighted
-    # estimate too and report the disagreement against distance from the decorrelated edge,
-    # in rad of SCREEN (x 1/|det|), which is the number that matters.
+    # DIAGNOSTIC (no behaviour change).  `z` is a UNIT phasor on all of `valid`, so a
+    # decorrelated pixel pushes as hard as a coherent one and is injected (dw-1)/2 px into
+    # the surrounding land.  Report the cost against distance from the decorrelated edge.
     _wt = np.where(valid, np.minimum(np.nan_to_num(ca), np.nan_to_num(cb)), 0.0)
     _zw = _wt * np.exp(1j * np.where(valid, pa - pb, 0.0))
     _zws = uniform_filter(_zw.real, dw) + 1j * uniform_filter(_zw.imag, dw)
@@ -574,14 +563,10 @@ def solve_split(args, pa, pb, ca, cb, f0, f1, gt, epsg, out_dir, tag):
 
     mask = mask & (coh_diff >= args.coh_thresh)
 
-    # ICE.  Coherence over ice is far below land in both bands, and what does clear the
-    # gate is amplified by 1/|det| in the solve, so the screen there would be noise with the
-    # amplitude of signal.  The azimuth routes never see this: ampcor's SNR gate and
-    # --mask-glacier leave them continuing a low-pass from the surrounding land.
-    #
-    # Dropped from the MASK, not from the output: the weighted low-pass then carries the
-    # land solution across the glacier the same way.  Blanking instead would put a step at
-    # every margin -- see screen_from_offsets on why that is worse.
+    # ICE.  Coherence over ice is far below land in both bands, and what clears the gate is
+    # amplified by 1/|det|, so the screen there would be noise with the amplitude of signal.
+    # Dropped from the MASK, not the output: the weighted low-pass carries the land solution
+    # across instead.  Blanking would put a step at every margin.
     if args.glacier_mask:
         was = mask.sum()
         mask = mask & ~ice
@@ -598,14 +583,9 @@ def solve_split(args, pa, pb, ca, cb, f0, f1, gt, epsg, out_dir, tag):
     print(f"[diff] |phi_diff| max {np.abs(pd_m).max():.4f} against pi = {np.pi:.4f}; "
           f"{100 * (np.abs(pd_m) > 0.9 * np.pi).mean():.2f} % past 0.9 pi")
 
-    # THE BRANCH CUT.  phi_diff carries an arbitrary constant -- the dispersive datum is not
-    # observable from the SAR data alone -- and if that constant sits near +-pi the whole
-    # field is parked ON the cut, however coherent it is.  The unwrapper is then handed a
-    # field that flips branch cell to cell, and every cycle it gets wrong is multiplied by
-    # 1/|det| in the solve, i.e. 2 pi / |det| of screen.
-    #
-    # Rotating by the circular mean costs nothing: it moves disp by the constant -c/det, and
-    # --level removes the mean afterwards anyway.
+    # THE BRANCH CUT.  phi_diff carries an unobservable constant; if it sits near +-pi the
+    # field is parked on the cut and every wrong cycle costs 2pi/|det| of screen.  Rotating
+    # by the circular mean is free: it moves disp by -c/det, and --level removes the mean.
     if args.diff_datum == "rotate":
         c = float(np.angle(np.exp(1j * pd_m).mean()))
         phi_diff = np.angle(np.exp(1j * (phi_diff - c)))
@@ -626,13 +606,9 @@ def solve_split(args, pa, pb, ca, cb, f0, f1, gt, epsg, out_dir, tag):
     def unwrap(what, phi, w, m):
         """Unwrap, and turn what the unwrapper DECLINED into NaN so the mask can drop it."""
         print(f"[unwrap] {what} ...", flush=True)
-        # nlooks is snaphu's only statistical input and the two fields do NOT share one.
-        # phi_A is the plain 24x16 multilook; the band difference was additionally complex-
-        # averaged over diff_win x diff_win before it got here, so it carries diff_win^2
-        # times as many samples.  Handing snaphu phi_A's count for both would make it treat
-        # the band difference as far noisier than it is and refuse to connect regions.
-        # Two thirds accounts for the oversampling that makes neighbouring SLC samples
-        # correlated -- the same figure screen_sigma's retention factors assume.
+        # nlooks is snaphu's only statistical input and the two fields do NOT share one: the band
+        # difference was complex-averaged over diff_win^2 first, so it carries that many more
+        # samples.  Two thirds accounts for oversampling between neighbouring SLC samples.
         nlooks = args.looks[0] * args.looks[1] * (2.0 / 3.0)
         if what == "band difference":
             nlooks *= float(args.diff_win) ** 2
@@ -659,17 +635,10 @@ def solve_split(args, pa, pb, ca, cb, f0, f1, gt, epsg, out_dir, tag):
                   f"them before the solve")
 
         # THE UNWRAPPER'S COMPONENT DATUM.  Every non-zero label carries its own arbitrary
-        # integer cycle datum -- a landmass reachable only across a fjord is its own
-        # component -- and one cycle is 0.51076*2pi of screen through phi_A and 2pi/|det|
-        # through the band difference.  The low-pass then turns the step into a smooth ramp
-        # that tracks the region outline: a fringe band hugging a decorrelated margin.
-        #
-        # Restricting to the largest component costs coverage, so the default re-references
-        # instead: each component's median offset from a smooth reference built out of the
-        # largest is rounded to a whole cycle and removed.  A near-integer offset is what
-        # makes that safe, so the fractional part is the check, not an afterthought: a
-        # component whose offset is not convincingly an integer is dropped rather than
-        # guessed at, and the continuation fills it.
+        # integer cycle, worth 0.51076*2pi of screen through phi_A and 2pi/|det| through the
+        # band difference.  Restricting to the largest component costs coverage, so the default
+        # re-references: each component's median offset from the largest is rounded to a whole
+        # cycle and removed, and one that is not convincingly an integer is dropped instead.
         good = mask & ~declined
         resid = np.angle(np.exp(1j * (unw - phi)))
         # Phass fills what it could not reach with -10000.0, a FINITE sentinel that every
@@ -709,13 +678,9 @@ def solve_split(args, pa, pb, ca, cb, f0, f1, gt, epsg, out_dir, tag):
                 for i, c in sorted(zip(ids, cnt), key=lambda t: -t[1]):
                     if i == big:
                         continue
-                    # `ref` is the largest component's field, low-passed and continued.
-                    # Far from it, and over a component too small to average, the median
-                    # below is dominated by how badly `ref` extrapolates rather than by any
-                    # datum.  So only components large enough for the median to mean
-                    # something are re-referenced; the rest are dropped, because a datum
-                    # that cannot be measured cannot be trusted, and the continuation fills
-                    # what they covered.
+                    # `ref` is the largest component's field, low-passed and continued.  Far from it the
+                    # median below reflects how badly `ref` extrapolates rather than any datum, so only
+                    # components large enough to measure on are re-referenced; the rest are dropped.
                     z2 = good & (lab == i) & np.isfinite(ref)
                     if c / tot < args.unwrap_min_component or z2.sum() < 50:
                         kill |= good & (lab == i)
@@ -723,13 +688,9 @@ def solve_split(args, pa, pb, ca, cb, f0, f1, gt, epsg, out_dir, tag):
                         continue
                     d = float(np.median((unw - ref)[z2])) / cyc
                     k = float(np.round(d))
-                    # k == 0 means there is no WHOLE-CYCLE error to remove, and the sub-cycle
-                    # part is the component's real signal difference from the reference, not
-                    # a datum.  Leave those alone: dropping them cost 16 % of frequency A and
-                    # 14 % of the band difference -- which has no datum problem at all, its
-                    # four largest components measuring +0.010, +0.036, -0.011, +0.015
-                    # cycles -- for nothing.  Only a component that wants a NON-ZERO shift
-                    # and does not land near a whole cycle is genuinely suspect.
+                    # k == 0 means no WHOLE-CYCLE error to remove, and the sub-cycle part is real signal,
+                    # not a datum.  Only a component wanting a non-zero shift that misses a whole cycle
+                    # is suspect.
                     if k == 0.0:
                         continue
                     if abs(d - k) > args.unwrap_cycle_tol:
@@ -751,11 +712,9 @@ def solve_split(args, pa, pb, ca, cb, f0, f1, gt, epsg, out_dir, tag):
                       f"{args.unwrap_cycle_tol} of an integer; dropped a further "
                       f"{100 * untouched / tot:.1f} % in components too small to measure an "
                       f"offset on (their datum is unknown, so they cannot enter the solve)")
-                # THE TRIPWIRE.  A whole-cycle datum in phi_A costs 0.51076*2pi of screen
-                # and is a nuisance; the same thing in the BAND DIFFERENCE costs 2pi/|det|
-                # and makes the screen worthless.  If it fires, the run STOPS: publishing a
-                # split screen whose band difference needed re-referencing would put fringes
-                # in the product that look physical.
+                # THE TRIPWIRE.  A whole-cycle datum costs 0.51076*2pi of screen through phi_A but
+                # 2pi/|det| through the band difference, which makes the screen worthless.  The run
+                # STOPS rather than publish fringes that look physical.
                 if moved and not what.startswith("freq") and not args.allow_diff_cycles:
                     raise SystemExit(
                         f"[unwrap] REFUSING TO CONTINUE: the band difference needed "
@@ -768,12 +727,9 @@ def solve_split(args, pa, pb, ca, cb, f0, f1, gt, epsg, out_dir, tag):
                         f"proceeds anyway once you have.")
         return np.where(declined, np.nan, unw), conn
 
-    # UNWRAP EACH FIELD ON ITS OWN SUPPORT.  `mask` carries three coherence gates plus the
-    # ice gate by this point, and frequency A needs only its own.  Handing it the others
-    # cuts its domain into islands that have nothing to do with whether phi_A is
-    # unwrappable, and every island is a component with its own arbitrary integer datum.
-    # The solve still intersects with the full `mask` below, so no pixel enters the estimate
-    # that the gates exclude.
+    # UNWRAP EACH FIELD ON ITS OWN SUPPORT.  frequency A needs only its own coherence gate;
+    # the others cut its domain into islands, each with its own arbitrary datum.  The solve
+    # still intersects the full `mask`, so no excluded pixel enters the estimate.
     a_dom = mask
     if args.unwrap_support == "own":
         a_dom = valid & (ca >= args.coh_thresh)
@@ -791,11 +747,9 @@ def solve_split(args, pa, pb, ca, cb, f0, f1, gt, epsg, out_dir, tag):
         print(f"[unwrap] --no-unwrap-diff: the estimate cannot leave "
               f"+-{np.pi / abs(det):.1f} rad")
 
-    # An unwrapper does not unwrap everything it is handed, and what it declines comes back
-    # as NaN.  Those pixels are not measurements and must leave the mask BEFORE the solve --
-    # at 11.6x, one that gets through is worth more than the entire real screen, it survives
-    # the local-median rejection wherever the declined region is bigger than the median
-    # window, and the 12 km Gaussian then spreads it across a quarter of the frame.
+    # What the unwrapper declines comes back as NaN.  Those are not measurements and must
+    # leave the mask BEFORE the solve: at 1/|det| one survivor outweighs the real screen,
+    # and the low-pass then spreads it across the frame.
     done = np.isfinite(phi_a_u) & np.isfinite(phi_d_u)
     lost = int((mask & ~done).sum())
     if lost:
@@ -847,14 +801,9 @@ def solve_split(args, pa, pb, ca, cb, f0, f1, gt, epsg, out_dir, tag):
         disp_f = np.where(good, disp, np.nan)
 
     # --- THE TWO TERMS OF THE SOLVE, KEPT APART.  disp = c_a*phi_A + c_d*phi_diff, and
-    # lowpass_weighted is linear in `v` at a fixed `w`, so low-passing each term with the
-    # SAME weights and the same sigma splits the filtered screen EXACTLY: term_a + term_d
-    # is disp_f, before the datum and the continuation.  That is what makes the attribution
-    # in check_against a measurement rather than an estimate.  The excess this route carries
-    # against the routes that never touch an absolute phase is either a whole-cycle error in
-    # phi_A (one cycle = c_a * 2 pi rad of screen) or a systematic in phi_diff (one rad =
-    # c_d rad of screen), and the two differ by a factor c_d/c_a = 22.7 -- so the size alone
-    # does not say which, but the SHAPE on phi_A's connected components does.
+    # lowpass_weighted is linear in `v` at fixed `w`, so low-passing each term with the same
+    # weights splits the filtered screen exactly: term_a + term_d is disp_f before the datum
+    # and the continuation.
     coef_a, coef_d = ((f0 - f1) / f0) / det, -1.0 / det
     if sig > 0:
         term_a = coef_a * lowpass_weighted(phi_a_u, wts, sig, args.iono_fill_floor)
@@ -875,11 +824,9 @@ def solve_split(args, pa, pb, ca, cb, f0, f1, gt, epsg, out_dir, tag):
 
     # --- GATE 8: THE UNWRAPPED phi_A MUST AGREE WITH THE WRAPPED INTERFEROGRAM AT 12 km.
     # phi_A is the only absolute unwrapped phase any route consumes, and its whole-cycle
-    # errors survive the low-pass as smooth humps that no downstream check can tell from
-    # ionosphere.  The wrapped interferogram's own gradients, low-passed with the same weights
-    # and integrated (integrate_wrapped_gradient), are the reference the unwrapper has to
-    # reproduce: same field, no datum.  The run stops if it does not, because a screen built on
-    # a phi_A that fails here can carry tens of radians of hump into the screen.
+    # errors survive the low-pass as smooth humps nothing downstream can tell from
+    # ionosphere.  The integrated wrapped gradients are the reference; the run stops if
+    # they disagree.
     phi_grad = None
     if sig > 0:
         t0 = time.time()
@@ -945,11 +892,9 @@ def solve_split(args, pa, pb, ca, cb, f0, f1, gt, epsg, out_dir, tag):
     # invented beyond it.  See fill_gaps for what leaving NaN here costs.
     reached = np.isfinite(disp_f)
     if args.iono_fill != "none":
-        # CONTINUE ALONG THE TREND, NOT FLAT.  fill_gaps is a pinned relaxation, so past the
-        # data edge it goes flat and the ionosphere does not.  Relax the RESIDUAL from a
-        # low-order surface fitted on the low-pass reach and put the surface back.  A plane
-        # is the default: a quadratic follows the measured region more closely but
-        # overshoots past the edge, which is where the continuation is used.
+        # CONTINUE ALONG THE TREND, NOT FLAT.  fill_gaps is a pinned relaxation and goes flat
+        # past the data edge; the ionosphere does not.  Relax the residual from a low-order
+        # surface and put it back.  A quadratic tracks the data better but overshoots beyond.
         trend = fit_trend(disp_f, reached, args.iono_fill_trend)
         disp_f = fill_gaps(disp_f - trend, reached, reached | np.isfinite(pa)) + trend
 
@@ -1040,32 +985,21 @@ def screen_to_lattice(screen, gt, npz_a, X, Y, out_npz, datum="as-is", measured=
                                    order=1, mode="constant", cval=0.0) > 0.5
         valid = valid & meas
     if datum == "per-column":
-        # THE SAME DATUM THE AZIMUTH ROUTE CARRIES.  The offsets route integrates along
-        # track and subtracts the per-column azimuth mean, so a purely range-varying field
-        # cannot survive in it.  This route keeps it, which is an advantage only if what it
-        # keeps is ionosphere.  It need not be: the band difference enters the solve with
-        # gain 1/|det|, so a systematic phi_diff error of a fraction of a radian across the
-        # swath reproduces a frame-scale range bend, far below the per-pixel noise and
-        # invisible in phi_diff itself -- a non-dispersive leak that tracks the geometry
-        # rather than the ionosphere.
-        #
-        # Removing the column mean THROWS AWAY any real range-varying ionosphere along with
-        # the leak.  That is the trade, and whether it is the right one has to be measured
-        # per frame rather than assumed.
+        # THE SAME DATUM THE AZIMUTH ROUTE CARRIES.  That route subtracts the per-column mean, so
+        # a purely range-varying field cannot survive in it; this one keeps it, which helps only
+        # if what it keeps is ionosphere.  The band difference enters at 1/|det|, so a small
+        # systematic there reproduces a frame-scale range bend.  Removing the column mean
+        # discards any real range-varying signal with it -- a per-frame judgement.
         with np.errstate(invalid="ignore"):
             colmean = np.nanmean(np.where(valid, out, np.nan), axis=0, keepdims=True)
         colmean = np.where(np.isfinite(colmean), colmean, 0.0)
         out = np.where(valid, out - colmean, np.nan).astype(np.float32)
         print(f"[screen] per-column datum removed: column means spanned "
               f"{np.nanmin(colmean):+.2f} .. {np.nanmax(colmean):+.2f} rad")
-    # A NaN here would go into the npz as np.nan_to_num -> 0.0, and the offsets screen's
-    # to_lattice hands that straight to the interferogram stage, which applies
-    # exp(-1j*screen) without looking at `valid`.  An uncovered cell would then not be an
-    # absent correction but a ZERO one, and the product would step by the full local screen
-    # value at every rim.  fill_gaps closes the
-    # gaps on the map grid; this closes the ones the lattice sampling can still open at the
-    # swath edge, and says so rather than zeroing them.  `valid` is unchanged: it still marks
-    # where the screen was defined, not where it was filled in here.
+    # A NaN here would reach the npz as 0.0, and the interferogram stage applies
+    # exp(-1j*screen) without consulting `valid` -- so an uncovered cell would be a ZERO
+    # correction, stepping the product by the full local screen at every rim.  `valid` is
+    # unchanged: it still marks where the screen was defined, not what was filled here.
     gap = ~np.isfinite(out)
     if gap.any():
         from scipy.ndimage import distance_transform_edt
