@@ -159,7 +159,7 @@ def main(argv=None):
                         "the filter and the unwrapping.  The uncorrected products are "
                         "written too, so the two can be compared without a re-run")
     g.add_argument("--iono-screen-calibrate", action="store_true",
-                   help="fit Liu et al. 2014 Eq. (2) against this pair's own phase "
+                   help="fit the screen gain against this pair's own phase "
                         "and PRINT the gain the applied screen is short by.  Purely "
                         "diagnostic: nothing subtracted changes.  Feed the number "
                         "back through --iono-screen-gain when you want it applied")
@@ -318,15 +318,16 @@ def main(argv=None):
         # coh / p1 / p2 stay exactly as measured.
         screen, _ = ION.to_lattice(a.iono_screen, a.ref_origin, a.looks, ifg.shape)
         if a.iono_screen_calibrate:
-            # Liu et al. 2014 Eq. (2) on THIS pair, measured before the screen is removed:
+            # the gain fit on THIS pair, measured before the screen is removed:
             # what the applied screen is short by.  A diagnostic, not an action -- it never
             # changes what is subtracted, because a gain fitted to the same interferogram it
             # then corrects is circular unless a human looks at it and sets it deliberately.
-            al, r, n = ION.liu_gain(np.angle(ifg), coh, screen, block=a.iono_calib_block)
-            print(f"[iono/liu] Eq.(2) fit on {n} block pairs "
+            al, r, n = ION.fit_screen_gain(np.angle(ifg), coh, screen,
+                                           block=a.iono_calib_block)
+            print(f"[iono/gain] fit on {n} block pairs "
                   f"({a.iono_calib_block}x{a.iono_calib_block} looks): alpha = {al:.4f}, "
                   f"r = {r:.3f}", flush=True)
-            print(f"[iono/liu] alpha 1.0 would mean the applied screen already has the "
+            print(f"[iono/gain] alpha 1.0 would mean the applied screen already has the "
                   f"right amplitude; the calibrated setting is the --iono-screen-gain used "
                   f"to BUILD this screen times {al:.4f}", flush=True)
         disp = (ifg * np.exp(-1j * screen)).astype(np.complex64)

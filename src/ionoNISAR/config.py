@@ -63,6 +63,37 @@ def find_granule(where, level, track, frame, date):
     return hits[0] if hits else None
 
 
+def carriers(h5, pol="HH"):
+    """Which frequencies this RSLC holds for the given polarisation."""
+    import h5py
+    out = []
+    try:
+        with h5py.File(h5, "r") as f:
+            for fr in ("A", "B"):
+                if f"/science/LSAR/RSLC/swaths/frequency{fr}/{pol}" in f:
+                    out.append(fr)
+    except OSError:
+        pass
+    return out
+
+
+def dem_covers(ref, dem):
+    """How many of the frame polygon's vertices fall inside the DEM."""
+    from osgeo import gdal
+
+    from . import grid as G
+    gdal.UseExceptions()
+    ds = gdal.Open(dem)
+    gt = ds.GetGeoTransform()
+    x0, y0 = gt[0], gt[3]
+    x1, y1 = x0 + gt[1] * ds.RasterXSize, y0 + gt[5] * ds.RasterYSize
+    lo_x, hi_x = min(x0, x1), max(x0, x1)
+    lo_y, hi_y = min(y0, y1), max(y0, y1)
+    pts = G.bounding_polygon(ref)
+    inside = sum(1 for lon, lat in pts if lo_x <= lon <= hi_x and lo_y <= lat <= hi_y)
+    return inside, len(pts)
+
+
 def coreg_extra(c):
     """The fill, outlier and refocus settings as coregister arguments."""
     out = []
@@ -114,6 +145,28 @@ def preflight(c, need_gpu=True, min_free_gb=300):
             notes.append(f"{what} not built yet ({p})")
         else:
             notes.append(f"{what}: {os.path.basename(p)}")
+
+    # both carriers, because the split-spectrum screen differences them
+    for what, p in (("reference", c.ref), ("secondary", c.sec)):
+        if p and os.path.exists(p):
+            have = carriers(p, c.pol)
+            if "A" not in have:
+                problems.append(f"the {what} granule has no frequency A / {c.pol}")
+            elif "B" not in have:
+                problems.append(f"the {what} granule has no frequency B / {c.pol}; the split "
+                                f"screen differences the two carriers and cannot run without it")
+            else:
+                notes.append(f"{what} carries frequency A and B / {c.pol}")
+
+    # a DEM that does not reach the frame edge costs a run, so say so before one starts
+    if c.ref and os.path.exists(c.ref) and os.path.exists(c.dem):
+        inside, total = dem_covers(c.ref, c.dem)
+        if inside == total:
+            notes.append(f"DEM covers all {total} frame-polygon vertices")
+        else:
+            notes.append(f"DEM covers {inside}/{total} frame-polygon vertices -- the gap is "
+                         f"usually open water, where the product has no data either; check a "
+                         f"quicklook before assuming it is harmless")
 
     print(f"pair {c.tag}   track {c.track} frame {c.frame}   {c.dates[0]} / {c.dates[1]}")
     for n in notes:

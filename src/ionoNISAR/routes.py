@@ -655,12 +655,12 @@ def parse_args(argv=None):
                         "attenuate the ionospheric wavelengths; iterating flattens it.  "
                         "Leave this at 1 unless there is a measured reason not to")
     g.add_argument("--iono-screen-gain", type=float, default=1.0, metavar="ALPHA",
-                   help="Liu et al. 2014 Eq. (2) gain for the along-track integration: "
+                   help="gain for the along-track integration: "
                         "alpha is FITTED against the pair's own phase rather than taken as "
                         "the theoretical constant.  Default 1.0 is the theoretical constant "
                         "alone.  Frame dependent -- measure it, do not assume it")
     g.add_argument("--iono-screen-calibrate", action="store_true",
-                   help="fit and print Liu et al. 2014 Eq. (2) for every route that "
+                   help="fit and print the screen gain for every route that "
                         "applies a screen -- the gain that screen is still short by. "
                         " Diagnostic only; --iono-screen-gain is what applies it")
     g.add_argument("--iono-screen-integrand", choices=["raw", "filled"], default="raw",

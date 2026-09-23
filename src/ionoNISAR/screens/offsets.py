@@ -294,17 +294,17 @@ def screen_from_offsets(args, ref_meta, win, az, keep, filled=None, az_filled=No
               f"and beyond ~16 km that screen is worse than no screen")
     phi -= phi.mean(axis=0, keepdims=True)          # the per-column datum; see the docstring
 
-    # Liu et al. 2014 (TGRS 52(10), Eq. 2) writes the along-track derivative of the
-    # interferogram as a linear function of the azimuth-shift observable,
-    # dphi_InSAR/daz = alpha * phi_MAI + beta, and integrates that.  Everything above this
-    # line is that integrand with alpha pinned to its theoretical value of 1, so `gain` is
-    # alpha and 1.0 leaves the screen unscaled.  Liu's beta is not carried: it is a
-    # per-column constant, and the per-column datum on the line above already removes any
-    # such constant.  The gain is an empirical calibration, so it is off by default.
+    # The along-track derivative of the interferogram can be written as a linear function
+    # of the azimuth-shift observable, dphi/daz = alpha * phi_shift + beta, and that is what
+    # is integrated.  Everything above this line is that integrand with alpha pinned to its
+    # theoretical value of 1, so `gain` is alpha and 1.0 leaves the screen unscaled.  The
+    # constant beta is not carried: it is per-column, and the per-column datum on the line
+    # above already removes any such constant.  The gain is an empirical calibration, so it
+    # is off by default.
     gain = float(getattr(args, "iono_screen_gain", 1.0) or 1.0)
     if gain != 1.0:
         phi *= gain
-        print(f"[iono] Liu Eq.(2) gain alpha = {gain:g} applied to the integrated screen "
+        print(f"[iono] gain alpha = {gain:g} applied to the integrated screen "
               f"(1.0 = the theoretical constant alone)")
 
     # VALIDITY, and only validity: a gap narrower than --iono-screen-max-gap has had its
@@ -349,8 +349,8 @@ def screen_from_offsets(args, ref_meta, win, az, keep, filled=None, az_filled=No
     return phi, valid
 
 
-def liu_gain(unc, coh, screen, block=16, coh_min=0.3, w_min=0.2):
-    """Liu et al. 2014 Eq. (2), fitted: the factor the applied screen is short by."""
+def fit_screen_gain(unc, coh, screen, block=16, coh_min=0.3, w_min=0.2):
+    """Fit the factor the applied screen is short by, against the pair's own phase."""
     unc = np.asarray(unc, np.float64)
     coh = np.asarray(coh, np.float64)
     scr = np.asarray(screen, np.float64)

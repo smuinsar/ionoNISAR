@@ -1320,14 +1320,14 @@ def parse_args(argv=None):
                         "the passband while the stopband stays shut.  Leave this at 1 "
                         "unless there is a measured reason not to")
     g.add_argument("--iono-screen-gain", type=float, default=1.0, metavar="ALPHA",
-                   help="Liu et al. 2014 Eq. (2) gain: the along-track derivative of the "
+                   help="gain on the along-track integration: the derivative of the "
                         "interferogram is fitted as alpha * (azimuth-shift observable) + "
                         "beta, and alpha rather than the theoretical constant is what gets "
                         "integrated.  Default 1.0 is the theoretical constant alone.  Alpha "
                         "is frame dependent, so measure it before setting it "
                         "(--iono-screen-calibrate prints it)")
     g.add_argument("--iono-screen-calibrate", action="store_true",
-                   help="have the interferogram stage fit Liu et al. 2014 Eq. (2) "
+                   help="have the interferogram stage fit the gain "
                         "against this pair and PRINT the gain the screen is short "
                         "by.  Diagnostic only; set --iono-screen-gain to act on it")
     g.add_argument("--iono-shell-km", type=float, default=350.0, metavar="H",
