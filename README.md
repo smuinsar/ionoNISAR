@@ -1,5 +1,9 @@
 # ionoNISAR
 
+[![PyPI](https://img.shields.io/pypi/v/ionoNISAR.svg)](https://pypi.org/project/ionoNISAR/)
+[![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 Correcting the ionosphere in NISAR L-band repeat-pass interferograms.
 
 At L band, the ionosphere affects interferometry in two primary ways. Along-track gradients 
