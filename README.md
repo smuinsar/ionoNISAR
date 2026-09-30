@@ -133,9 +133,10 @@ estimators are out of scope for this package.
 dispersive phase, so the screen carries an arbitrary constant. That matters when comparing
 screens, not when correcting an interferogram.
 
-## Citing
+## Citation
 
-If this code contributes to published work, please cite the accompanying paper.
+If you use ionoNISAR in published work, please cite the software via its Zenodo DOI:
+[10.5281/zenodo.23029458](https://doi.org/10.5281/zenodo.23029458).
 
 ## Licence
 
